@@ -1,7 +1,8 @@
 import os, sys, threading, locale, configparser, glob
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressDialog,
-    QComboBox, QLineEdit, QListWidget, QPushButton, QSlider, QScrollBar, QListWidgetItem
+    QComboBox, QLineEdit, QListWidget, QPushButton, QSlider, QScrollBar, QListWidgetItem,
+    QDialog, QFormLayout, QDialogButtonBox, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QFont, QKeyEvent, QIcon
@@ -31,7 +32,6 @@ class Track(TypedDict):
     title:str
     url:str
 
-from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
 
 class AddPlaylistDialog(QDialog):
     def __init__(self, parent=None) -> None:
@@ -63,13 +63,13 @@ class MusicPlayer(QWidget):
         super().__init__()
         self.yt_playlist_path : str = os.path.join(instance_path, 'playlists_yt.json')
         self.local_playlist_path : str = os.path.join(instance_path, 'playlists_local.json')
+        self.yt_headers_path : str = os.path.join(instance_path, 'browser.json')
         if not os.path.exists(self.yt_playlist_path):
             with open(self.yt_playlist_path, 'w') as file:
                 json.dump({}, file)
         if not os.path.exists(self.local_playlist_path):
             with open(self.local_playlist_path, 'w') as file:
                 json.dump({}, file)
-
 
         self.config: configparser.ConfigParser = configparser.ConfigParser()
         self.config.read(os.path.join(executable_dir, 'app.ini'))
@@ -85,7 +85,9 @@ class MusicPlayer(QWidget):
         with open(os.path.join(os.path.join(executable_dir, 'themes'), theme_file), 'r') as file:
             self.setStyleSheet(file.read())
 
-        self.yt_music_api : YTMusic = YTMusic()
+        self.yt_music_api : YTMusic = YTMusic(
+            self.yt_headers_path if (os.path.exists(self.yt_headers_path) and self.use_cookies) else None
+        )
         self.player : Optional[subprocess.Popen] = None
 
         self.track_url : Optional[str] = None
@@ -98,6 +100,13 @@ class MusicPlayer(QWidget):
 
         self.load_playlists()
         self.init_ui()
+
+    def create_message(self, title:str, information:str) -> None:
+        message_box : QMessageBox = QMessageBox()
+        message_box.setWindowTitle(title)
+        message_box.setText(information)
+        message_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        message_box.exec()
 
     def load_playlists(self) -> None:
         self.playlist_titles = []
@@ -262,6 +271,7 @@ class MusicPlayer(QWidget):
             case '/CACHE':
                 with open(os.path.join(instance_path, f'cache_{self.selected_playlist}.json'), 'w', encoding='utf-8') as file:
                     json.dump(self.tracks, file, indent=4, ensure_ascii=False)
+                self.create_message('CACHE', f'[{self.selected_playlist}] was cached')
                 self.reload_playlists()
                 self.entry_filter.clear()
                 return
@@ -298,6 +308,7 @@ class MusicPlayer(QWidget):
             case '/COOKIES':
                 self.use_cookies = not self.use_cookies
                 self.entry_filter.clear()
+                self.create_message('COOKIES', 'Cookies are now ' + ('ENABLED' if self.use_cookies else 'DISABLED'))
                 return
 
             case '/DOWNLOAD':
@@ -314,10 +325,15 @@ class MusicPlayer(QWidget):
                 self.tracks = [{'title': item['title'], 'url': f'https://music.youtube.com/watch?v={item['videoId']}'} for item in results]
                 self.update_track_list()
             case 'SEARCH PLAYLIST':
-                term : str = self.entry_filter.text().lower()
-                results : list[dict] = self.yt_music_api.search(term, filter='playlists')
-                self.tracks = [{'title': item['title'], 'url': f'https://music.youtube.com/playlist?list={item['browseId'].removeprefix('VL')}'} for item in results]
-                self.update_track_list()
+                if self.entry_filter.text() == '/LIBRARY':
+                    library_playlists : list[dict] = self.yt_music_api.get_library_playlists()
+                    self.tracks = [{'title': item['title'], 'url': f'https://music.youtube.com/playlist?list={item['playlistId']}'} for item in library_playlists]
+                    self.update_track_list()
+                else:
+                    term : str = self.entry_filter.text().lower()
+                    results : list[dict] = self.yt_music_api.search(term, filter='playlists')
+                    self.tracks = [{'title': item['title'], 'url': f'https://music.youtube.com/playlist?list={item['browseId'].removeprefix('VL')}'} for item in results]
+                    self.update_track_list()
 
     def select_track(self) -> None:
         current_item : Optional[QListWidgetItem] = self.list_tracks.currentItem()
